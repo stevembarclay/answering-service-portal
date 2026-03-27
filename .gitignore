@@ -1,0 +1,63 @@
+# Dependencies
+node_modules/
+.pnp
+.pnp.js
+
+# Next.js
+.next/
+out/
+
+# Production
+build/
+dist/
+
+# Env files
+.env
+.env.local
+.env.development.local
+.env.test
+.env.test.local
+.env.production.local
+
+# Logs
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# OS
+.DS_Store
+*.pem
+
+# IDE
+.vscode/
+.idea/
+
+# Build artifacts
+tsconfig.tsbuildinfo
+
+# Test
+playwright-report/
+test-results/
+coverage/
+.auth/*.json
+visual-qa-screenshots/
+
+# Internal tooling (not for public repo)
+.claude/
+.agents/
+.cursor/
+.superpowers/
+.playwright-mcp/
+CLAUDE.md
+AGENTS.md
+docs/agents/
+docs/design/
+docs/handoffs/
+docs/templates/
+docs/superpowers/
+docs/strategy/
+docs/archive/
+docs/product/
+docs/ai-customization.md
+scripts/screenshot-audit.ts
+.vercel

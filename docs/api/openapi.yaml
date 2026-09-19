@@ -1,0 +1,1106 @@
+openapi: "3.1.0"
+info:
+  title: Answering Service Portal API
+  version: "1.0.0"
+  description: |
+    The Answering Service Portal REST API for operators and their integrators.
+
+    All endpoints require a Bearer token in the `Authorization` header.
+    API keys are created in the Operator Admin under **Settings → API Keys**.
+
+    Keys are either **operator-scoped** (access to all clients in your org) or
+    **business-scoped** (access to a single client). Several write endpoints
+    require operator-scoped keys.
+  license:
+    name: AGPL-3.0
+    url: https://www.gnu.org/licenses/agpl-3.0.html
+
+servers:
+  - url: https://your-portal.com
+    description: Production
+
+security:
+  - BearerAuth: []
+
+components:
+  securitySchemes:
+    BearerAuth:
+      type: http
+      scheme: bearer
+      description: >
+        API key created in Operator Admin → Settings → API Keys.
+        Format: `Authorization: Bearer sk_live_...`
+
+  schemas:
+    Error:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: object
+          required: [message, code]
+          properties:
+            message:
+              type: string
+              example: "business_id query parameter is required for operator keys."
+            code:
+              type: string
+              enum:
+                - UNAUTHORIZED
+                - FORBIDDEN
+                - BAD_REQUEST
+                - NOT_FOUND
+                - INTERNAL_ERROR
+              example: BAD_REQUEST
+
+    CallInput:
+      type: object
+      required: [businessId, timestamp, callType, direction, durationSeconds, telephonyStatus, message]
+      properties:
+        businessId:
+          type: string
+          format: uuid
+          description: UUID of the client business. Must belong to your operator org.
+        timestamp:
+          type: string
+          format: date-time
+          description: When the call occurred (ISO 8601).
+        callerName:
+          type: string
+          description: Caller's full name.
+        callerNumber:
+          type: string
+          description: Caller's phone number.
+        callbackNumber:
+          type: string
+          description: Callback number (may differ from callerNumber).
+        callType:
+          type: string
+          enum: [urgent, new-client, appointment, general-info, after-hours]
+          description: Call type slug.
+        direction:
+          type: string
+          enum: [inbound, outbound]
+        durationSeconds:
+          type: integer
+          minimum: 0
+          description: Duration in seconds. Use 0 for missed/voicemail.
+        telephonyStatus:
+          type: string
+          enum: [completed, missed, voicemail]
+        message:
+          type: string
+          minLength: 1
+          description: Agent's written call note. Must not be empty.
+        recordingUrl:
+          type: string
+          format: uri
+          description: URL to a voicemail recording.
+
+    CallIngestResult:
+      type: object
+      required: [businessId, status]
+      properties:
+        businessId:
+          type: string
+          format: uuid
+        status:
+          type: string
+          enum: [inserted, error]
+        callId:
+          type: string
+          format: uuid
+          description: Present when status is "inserted".
+        issue:
+          type: string
+          description: Validation error message. Present when status is "error".
+
+    CallLog:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        business_id:
+          type: string
+          format: uuid
+        timestamp:
+          type: string
+          format: date-time
+        caller_name:
+          type: string
+          nullable: true
+        caller_number:
+          type: string
+          nullable: true
+        callback_number:
+          type: string
+          nullable: true
+        call_type:
+          type: string
+        direction:
+          type: string
+          enum: [inbound, outbound]
+        duration_seconds:
+          type: integer
+        telephony_status:
+          type: string
+          enum: [completed, missed, voicemail]
+        message:
+          type: string
+        priority:
+          type: string
+          enum: [high, medium, low]
+        portal_status:
+          type: string
+          enum: [new, read, flagged_qa, assigned, resolved]
+        has_recording:
+          type: boolean
+
+    CallLogSummary:
+      type: object
+      description: >
+        Call log record as returned by the list endpoint. Does not include caller contact fields
+        (caller_name, caller_number, callback_number, has_recording) — use GET /api/v1/calls/{id}
+        for the full detail.
+      properties:
+        id:
+          type: string
+          format: uuid
+        business_id:
+          type: string
+          format: uuid
+        timestamp:
+          type: string
+          format: date-time
+        call_type:
+          type: string
+        direction:
+          type: string
+          enum: [inbound, outbound]
+        duration_seconds:
+          type: integer
+        telephony_status:
+          type: string
+          enum: [completed, missed, voicemail]
+        message:
+          type: string
+        priority:
+          type: string
+          enum: [high, medium, low]
+        portal_status:
+          type: string
+          enum: [new, read, flagged_qa, assigned, resolved]
+
+    MessageAction:
+      type: object
+      properties:
+        type:
+          type: string
+          enum: [priority_updated, status_changed, workflow_status_changed, assigned, flagged_qa]
+        by_user_id:
+          type: string
+          format: uuid
+        at:
+          type: string
+          format: date-time
+        from_value:
+          type: string
+          nullable: true
+        to_value:
+          type: string
+          nullable: true
+
+    CallLogDetail:
+      allOf:
+        - $ref: '#/components/schemas/CallLog'
+        - type: object
+          properties:
+            message_actions:
+              type: array
+              items:
+                $ref: '#/components/schemas/MessageAction'
+
+    PaginationMeta:
+      type: object
+      required: [page, limit, total]
+      properties:
+        page:
+          type: integer
+          minimum: 1
+        limit:
+          type: integer
+          minimum: 1
+          maximum: 100
+        total:
+          type: integer
+          minimum: 0
+
+    OnCallStep:
+      type: object
+      properties:
+        step:
+          type: integer
+          description: Step number in the escalation sequence (1-indexed).
+        name:
+          type: string
+        phone:
+          type: string
+        role:
+          type: string
+        waitMinutes:
+          type: integer
+          description: Minutes to wait before escalating to the next step.
+
+    OnCallCurrentResponse:
+      type: object
+      required: [businessId, asOf, shiftId, shiftName, shiftEndsAt, escalationSteps]
+      properties:
+        businessId:
+          type: string
+          format: uuid
+        asOf:
+          type: string
+          format: date-time
+        shiftId:
+          type: string
+          format: uuid
+          nullable: true
+        shiftName:
+          type: string
+          nullable: true
+        shiftEndsAt:
+          type: string
+          format: date-time
+          nullable: true
+        escalationSteps:
+          type: array
+          items:
+            $ref: '#/components/schemas/OnCallStep'
+
+    UsageInput:
+      type: object
+      required: [businessId, date, totalCalls, totalMinutes]
+      properties:
+        businessId:
+          type: string
+          format: uuid
+        date:
+          type: string
+          format: date
+          description: Usage period date (YYYY-MM-DD).
+        totalCalls:
+          type: integer
+          minimum: 0
+        totalMinutes:
+          type: integer
+          minimum: 0
+
+    UsageIngestResult:
+      type: object
+      required: [businessId, date, status]
+      properties:
+        businessId:
+          type: string
+        date:
+          type: string
+          format: date
+        status:
+          type: string
+          enum: [processed, error]
+        issue:
+          type: string
+          description: Present when status is "error".
+
+    UsagePeriod:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        business_id:
+          type: string
+          format: uuid
+        period_date:
+          type: string
+          format: date
+        total_calls:
+          type: integer
+        total_minutes:
+          type: integer
+        source:
+          type: string
+          enum: [api, csv_upload, startel, amtelco]
+        status:
+          type: string
+          enum: [processed, error]
+        error_detail:
+          type: object
+          nullable: true
+        processed_at:
+          type: string
+          format: date-time
+          nullable: true
+
+    BillingLineItem:
+      type: object
+      properties:
+        ruleId:
+          type: string
+          format: uuid
+        ruleName:
+          type: string
+        unitDescription:
+          type: string
+          description: Human-readable description of units applied, e.g. "47 calls × $3.50".
+        subtotalCents:
+          type: integer
+          description: Subtotal for this line item in integer cents.
+
+    BillingEstimate:
+      type: object
+      properties:
+        businessId:
+          type: string
+          format: uuid
+        periodStart:
+          type: string
+          format: date-time
+          description: Start of the billing period (ISO 8601 datetime).
+        periodEnd:
+          type: string
+          format: date-time
+          description: End of the billing period (ISO 8601 datetime).
+        asOf:
+          type: string
+          format: date-time
+          description: When this estimate was calculated.
+        totalCents:
+          type: integer
+          description: Running total for this period in integer cents.
+        callCount:
+          type: integer
+          description: Number of calls included in the estimate.
+        lineItems:
+          type: array
+          items:
+            $ref: '#/components/schemas/BillingLineItem'
+
+    BillingInvoice:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        businessId:
+          type: string
+          format: uuid
+        periodStart:
+          type: string
+          format: date-time
+          description: Start of the invoice period (ISO 8601 datetime).
+        periodEnd:
+          type: string
+          format: date-time
+          description: End of the invoice period (ISO 8601 datetime).
+        status:
+          type: string
+          enum: [open, closed, paid]
+          description: "'open' = current period, 'closed' = period ended unpaid, 'paid' = settled."
+        totalCents:
+          type: integer
+          description: Invoice total in integer cents.
+        callCount:
+          type: integer
+        lineItems:
+          type: array
+          items:
+            $ref: '#/components/schemas/BillingLineItem'
+        paidAt:
+          type: string
+          format: date-time
+          nullable: true
+        createdAt:
+          type: string
+          format: date-time
+
+    WebhookSubscription:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        operator_org_id:
+          type: string
+          format: uuid
+        url:
+          type: string
+          format: uri
+        topics:
+          type: array
+          items:
+            type: string
+            enum:
+              - call.created
+              - usage.upload_processed
+              - usage.upload_failed
+              - billing.threshold_75
+              - billing.threshold_90
+              - billing.threshold_100
+        status:
+          type: string
+          enum: [active, paused, failing]
+        consecutive_failure_count:
+          type: integer
+          minimum: 0
+        created_at:
+          type: string
+          format: date-time
+
+paths:
+  /api/v1/calls:
+    get:
+      summary: List call logs
+      description: >
+        Returns paginated call logs for a business.
+        Operator keys require the `business_id` query parameter.
+      operationId: listCalls
+      tags: [Calls]
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: page
+          in: query
+          schema:
+            type: integer
+            default: 1
+            minimum: 1
+          description: Page number (1-indexed).
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            default: 25
+            minimum: 1
+            maximum: 100
+          description: Results per page.
+        - name: business_id
+          in: query
+          schema:
+            type: string
+            format: uuid
+          description: Required for operator-scoped keys.
+      responses:
+        "200":
+          description: Paginated call log list.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/CallLogSummary'
+                  meta:
+                    $ref: '#/components/schemas/PaginationMeta'
+        "400":
+          description: Missing required parameter.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        "401":
+          description: Invalid or missing token.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+    post:
+      summary: Ingest calls
+      description: >
+        Ingest one or more call records. Accepts a JSON array or a CSV file
+        (`multipart/form-data` with a `file` field).
+        Requires an **operator-scoped** key with `calls:write` scope.
+      operationId: ingestCalls
+      tags: [Calls]
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: array
+              items:
+                $ref: '#/components/schemas/CallInput'
+              minItems: 1
+            example:
+              - businessId: "4a3b2c1d-0000-0000-0000-000000000001"
+                timestamp: "2026-03-26T14:30:00Z"
+                callerName: "John Smith"
+                callerNumber: "+15555550100"
+                callbackNumber: "+15555550100"
+                callType: "urgent"
+                direction: "inbound"
+                durationSeconds: 180
+                telephonyStatus: "completed"
+                message: "Caller reports chest pain. Requesting callback from Dr. Jones."
+          multipart/form-data:
+            schema:
+              type: object
+              required: [file]
+              properties:
+                file:
+                  type: string
+                  format: binary
+                  description: CSV file with call records.
+      responses:
+        "201":
+          description: All rows inserted.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: object
+                    properties:
+                      inserted:
+                        type: integer
+                      errors:
+                        type: integer
+                      results:
+                        type: array
+                        items:
+                          $ref: '#/components/schemas/CallIngestResult'
+        "207":
+          description: Partial success — some rows failed.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: object
+                    properties:
+                      inserted:
+                        type: integer
+                      errors:
+                        type: integer
+                      results:
+                        type: array
+                        items:
+                          $ref: '#/components/schemas/CallIngestResult'
+        "400":
+          description: Invalid request body.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        "401":
+          description: Invalid or missing token.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        "403":
+          description: Business-scoped key used; operator key required.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /api/v1/calls/{id}:
+    get:
+      summary: Get a call log
+      description: Get a single call log with its message action history.
+      operationId: getCall
+      tags: [Calls]
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+          description: Call log UUID.
+      responses:
+        "200":
+          description: Call log with action history.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    $ref: '#/components/schemas/CallLogDetail'
+        "401":
+          description: Invalid or missing token.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        "404":
+          description: Call not found or not accessible to this key.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /api/v1/calls/{id}/recording:
+    post:
+      summary: Upload a call recording
+      description: >
+        Upload a voicemail recording for an existing call.
+        Accepts MP3, WAV, or M4A files up to 50 MB.
+        Requires an **operator-scoped** key with `calls:write` scope.
+      operationId: uploadRecording
+      tags: [Calls]
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+          description: Call log UUID.
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required: [file]
+              properties:
+                file:
+                  type: string
+                  format: binary
+                  description: Audio file (MP3, WAV, or M4A, max 50 MB).
+      responses:
+        "201":
+          description: Recording uploaded.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: object
+                    properties:
+                      callId:
+                        type: string
+                        format: uuid
+                      storagePath:
+                        type: string
+        "400":
+          description: Missing file, unsupported type, or file too large.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        "403":
+          description: Call does not belong to your operator org.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        "404":
+          description: Call not found.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /api/v1/on-call/current:
+    get:
+      summary: Get current on-call contact
+      description: >
+        Returns the currently active on-call shift and escalation contacts for a business.
+        Shift resolution uses the business's configured time zone.
+        Returns `shiftId: null` and an empty `escalationSteps` array when no shift is active.
+      operationId: getOnCallCurrent
+      tags: [On-Call]
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: business_id
+          in: query
+          schema:
+            type: string
+            format: uuid
+          description: Required for operator-scoped keys.
+      responses:
+        "200":
+          description: Current on-call state.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    $ref: '#/components/schemas/OnCallCurrentResponse'
+              examples:
+                active_shift:
+                  summary: Active shift
+                  value:
+                    data:
+                      businessId: "uuid"
+                      asOf: "2026-03-26T22:30:00Z"
+                      shiftId: "uuid"
+                      shiftName: "Weeknight"
+                      shiftEndsAt: "2026-03-27T09:00:00Z"
+                      escalationSteps:
+                        - step: 1
+                          name: "Dr. Sarah Jones"
+                          phone: "555-0101"
+                          role: "Physician"
+                          waitMinutes: 5
+                no_shift:
+                  summary: No active shift
+                  value:
+                    data:
+                      businessId: "uuid"
+                      asOf: "2026-03-26T14:00:00Z"
+                      shiftId: null
+                      shiftName: null
+                      shiftEndsAt: null
+                      escalationSteps: []
+        "400":
+          description: Missing business_id for operator key.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        "401":
+          description: Invalid or missing token.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /api/v1/usage:
+    get:
+      summary: List usage periods
+      description: >
+        Returns up to 100 usage periods ordered by date descending.
+        Filter by `business_id` to scope to a single client.
+      operationId: listUsage
+      tags: [Usage]
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: business_id
+          in: query
+          schema:
+            type: string
+            format: uuid
+          description: Filter to a specific business.
+      responses:
+        "200":
+          description: Usage period list.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/UsagePeriod'
+        "401":
+          description: Invalid or missing token.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+    post:
+      summary: Upload usage data
+      description: >
+        Upload daily usage aggregates. Accepts a JSON array or CSV file.
+        Requires an **operator-scoped** key with `usage:write` scope.
+        Billing threshold events are fired automatically if a `bucket` rule threshold is crossed.
+      operationId: ingestUsage
+      tags: [Usage]
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: array
+              items:
+                $ref: '#/components/schemas/UsageInput'
+              minItems: 1
+          multipart/form-data:
+            schema:
+              type: object
+              required: [file]
+              properties:
+                file:
+                  type: string
+                  format: binary
+                  description: >
+                    CSV file with headers: date,business_id,total_calls,total_minutes
+      responses:
+        "200":
+          description: All rows processed.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: object
+                    properties:
+                      processed:
+                        type: integer
+                      errors:
+                        type: integer
+                      results:
+                        type: array
+                        items:
+                          $ref: '#/components/schemas/UsageIngestResult'
+        "207":
+          description: Partial success.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: object
+                    properties:
+                      processed:
+                        type: integer
+                      errors:
+                        type: integer
+                      results:
+                        type: array
+                        items:
+                          $ref: '#/components/schemas/UsageIngestResult'
+        "403":
+          description: Business-scoped key used; operator key required.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /api/v1/billing/estimate:
+    get:
+      summary: Get billing estimate
+      description: >
+        Returns the running billing estimate for the current period.
+        Computed from billing rules + call logs / usage periods.
+      operationId: getBillingEstimate
+      tags: [Billing]
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: business_id
+          in: query
+          schema:
+            type: string
+            format: uuid
+          description: Required for operator-scoped keys.
+      responses:
+        "200":
+          description: Billing estimate.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    $ref: '#/components/schemas/BillingEstimate'
+        "400":
+          description: Missing business_id for operator key.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /api/v1/billing/invoices:
+    get:
+      summary: List past invoices
+      description: >
+        Returns past billing invoices for a business.
+        Operator-scoped keys must include the `business_id` query parameter.
+      operationId: listInvoices
+      tags: [Billing]
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: business_id
+          in: query
+          schema:
+            type: string
+            format: uuid
+          description: Required for operator-scoped keys.
+      responses:
+        "200":
+          description: Invoice list.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/BillingInvoice'
+        "400":
+          description: Missing business_id for operator key.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        "401":
+          description: Invalid or missing token.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /api/v1/webhooks:
+    get:
+      summary: List webhook subscriptions
+      description: >
+        List all webhook subscriptions for your operator org.
+        Requires an **operator-scoped** key with `webhooks:read` scope.
+      operationId: listWebhooks
+      tags: [Webhooks]
+      security:
+        - BearerAuth: []
+      responses:
+        "200":
+          description: Webhook subscription list.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/WebhookSubscription'
+        "403":
+          description: Business-scoped key used; operator key required.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+    post:
+      summary: Create a webhook subscription
+      description: >
+        Create a new webhook subscription for your operator org.
+        The response includes a `secret` — **save it immediately**; it is shown only once.
+        Requires an **operator-scoped** key with `webhooks:write` scope.
+      operationId: createWebhook
+      tags: [Webhooks]
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [url, topics]
+              properties:
+                url:
+                  type: string
+                  format: uri
+                  description: HTTPS endpoint URL.
+                topics:
+                  type: array
+                  items:
+                    type: string
+                    enum:
+                      - call.created
+                      - usage.upload_processed
+                      - usage.upload_failed
+                      - billing.threshold_75
+                      - billing.threshold_90
+                      - billing.threshold_100
+                  minItems: 1
+            example:
+              url: "https://your-server.com/webhooks/stintwell"
+              topics: ["call.created", "billing.threshold_100"]
+      responses:
+        "201":
+          description: Subscription created. Save the returned `secret`.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    allOf:
+                      - $ref: '#/components/schemas/WebhookSubscription'
+                      - type: object
+                        properties:
+                          secret:
+                            type: string
+                            description: HMAC-SHA256 signing secret. Shown only once.
+        "400":
+          description: Missing url or topics.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        "403":
+          description: Business-scoped key used; operator key required.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /api/v1/webhooks/{id}:
+    delete:
+      summary: Delete a webhook subscription
+      description: >
+        Permanently delete a webhook subscription.
+        No further events will be delivered to its URL.
+        Requires an **operator-scoped** key with `webhooks:write` scope.
+      operationId: deleteWebhook
+      tags: [Webhooks]
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+          description: Webhook subscription UUID.
+      responses:
+        "204":
+          description: Subscription deleted.
+        "403":
+          description: Business-scoped key used; operator key required.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+tags:
+  - name: Calls
+    description: Ingest and retrieve call records.
+  - name: On-Call
+    description: Query the on-call schedule.
+  - name: Usage
+    description: Upload and retrieve daily usage aggregates.
+  - name: Billing
+    description: Retrieve billing estimates and past invoices.
+  - name: Webhooks
+    description: Manage webhook subscriptions for real-time event delivery.
